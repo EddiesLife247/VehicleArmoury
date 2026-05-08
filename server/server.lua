@@ -29,17 +29,23 @@ end
 
 lib.callback.register('vehicle_armoury:getPlayerData', function(source)
     local Player = QBCore.Functions.GetPlayer(source)
-    if not Player then return nil end
+    if not Player then
+        debugPrint("[SERVER] Player not found for source: " .. tostring(source))
+        return nil
+    end
 
     local job = Player.PlayerData.job
     local certs = Player.PlayerData.metadata["pdcerts"] or {}
+
+    debugPrint("[SERVER] Job name: " .. tostring(job.name))
+    debugPrint("[SERVER] Job grade: " .. tostring(job.grade.level))
 
     local data = {
         job = job,
         certs = certs
     }
 
-    debugPrint("[SERVER] Returning player data: ", data)
+    debugPrint("[SERVER] Returning player data: " .. json.encode(data))
     return data
 end)
 
@@ -51,11 +57,11 @@ RegisterNetEvent('vehicle_armoury:logAccessDenied', function(stashId, vehicleMod
         ('**Player:** %s (%s)\n**Stash:** `%s`\n**Vehicle:** `%s`'):format(
             playerName, src, stashId or 'unknown', vehicleModel or 'unknown'
         ),
-        16711680 -- red
+        16711680
     )
 end)
 
-lib.callback.register('vehicle_armoury:createStash', function(source, stashId, items)
+lib.callback.register('vehicle_armoury:createStash', function(source, stashId, items, jobType)
     if not stashId or type(items) ~= 'table' then
         debugPrint('[VehicleArmoury][SERVER] Invalid stash creation request.')
         return false
@@ -69,40 +75,33 @@ lib.callback.register('vehicle_armoury:createStash', function(source, stashId, i
         debugPrint('[VehicleArmoury][SERVER] Player not found.')
         return false
     end
-debugPrint('[SERVER] Received items from client:')
-for _, item in ipairs(items) do
-    debugPrint((' - %s x%s'):format(item.name, item.count))
-end
 
-
-    local job = Player.PlayerData.job.name
-    local grade = Player.PlayerData.job.grade.level
-    local certs = Player.PlayerData.metadata["pdcerts"] or {}
-
-    debugPrint('[VehicleArmoury][SERVER] Player job:', job)
-    debugPrint('[VehicleArmoury][SERVER] Player certs:', certs)
-
-    local jobType
-    for type, jobs in pairs(Config.JobTypes) do
-        for _, j in ipairs(jobs) do
-            if j == job then
-                jobType = type
-                break
-            end
-        end
-        if jobType then break end
+    debugPrint('[SERVER] Received items from client:')
+    for _, item in ipairs(items) do
+        debugPrint((' - %s x%s'):format(item.name, item.count))
     end
 
-    local config = Config.VehicleArmouries[Config.JobTypes[jobType]]
-    if not config then
-        debugPrint('[VehicleArmoury][SERVER] No config found for jobType:', jobType)
+    -- If jobType wasn't passed, fall back to resolving from player job
+    if not jobType then
+        local job = Player.PlayerData.job.name
+        jobType = getPlayerJobType(job)
+        debugPrint('[VehicleArmoury][SERVER] jobType not provided, resolved from player job: ' .. tostring(jobType))
+    end
+
+    if not jobType then
+        debugPrint('[VehicleArmoury][SERVER] Could not determine jobType.')
         return false
     end
 
-    -- Combine items based on certs or grade level
-local finalItems = items
+    local config = Config.VehicleArmouries[jobType]
+    if not config then
+        debugPrint('[VehicleArmoury][SERVER] No config found for jobType: ' .. tostring(jobType))
+        return false
+    end
 
+    local finalItems = items
     local slots = math.max(#finalItems, 60)
+
     local inventory = exports.ox_inventory:GetInventory({ id = stashId, owner = owner })
     debugPrint('Checking inventory for stash: ' .. stashId .. ' Owner: ' .. owner)
 
@@ -112,8 +111,7 @@ local finalItems = items
     end
 
     if not registeredStashes[stashKey] then
-local stashKey = stashId .. ':' .. owner
-exports.ox_inventory:RegisterStash(stashId, 'Vehicle Armoury', slots, 80000000, owner)
+        exports.ox_inventory:RegisterStash(stashId, 'Vehicle Armoury', slots, 80000000, owner)
         registeredStashes[stashKey] = true
         debugPrint('[VehicleArmoury][SERVER] Registered new stash: ' .. stashKey)
     end
@@ -122,34 +120,33 @@ exports.ox_inventory:RegisterStash(stashId, 'Vehicle Armoury', slots, 80000000, 
     if not inv then
         debugPrint('[DEBUG] stash inventory not found for stashId: ' .. stashId)
         return false
+    end
+
+    debugPrint('[DEBUG] Found inventory for stashId: ' .. stashId)
+    exports.ox_inventory:ClearInventory(inv.id)
+    debugPrint('[DEBUG] Cleared existing inventory for stash: ' .. inv.id)
+
+    debugPrint('[VehicleArmoury][SERVER] Preparing to add items:')
+    for _, item in ipairs(finalItems) do
+        debugPrint(('[VehicleArmoury][SERVER] Item: %s | Count: %s'):format(item.name, item.count))
+        local success = exports.ox_inventory:AddItem(inv.id, item.name, item.count)
+        debugPrint(('[VehicleArmoury][SERVER] AddItem result for %s: %s'):format(item.name, tostring(success)))
+    end
+
+    local updatedInv = exports.ox_inventory:GetInventory(inv.id)
+    if updatedInv and updatedInv.items then
+        debugPrint('[VehicleArmoury][SERVER] Final stash inventory:')
+        for _, item in pairs(updatedInv.items) do
+            debugPrint(('  - %s x%s'):format(item.name, item.count))
+        end
     else
-        debugPrint('[DEBUG] Found inventory for stashId: ' .. stashId)
-        exports.ox_inventory:ClearInventory(inv.id)
-        debugPrint('[DEBUG] Cleared existing inventory for stash: ' .. inv.id)
-
-debugPrint('[VehicleArmoury][SERVER] Preparing to add items:')
-for _, item in ipairs(finalItems) do
-    debugPrint(('[VehicleArmoury][SERVER] Item: %s | Count: %s'):format(item.name, item.count))
-
-    local success = exports.ox_inventory:AddItem(inv.id, item.name, item.count)
-    debugPrint(('[VehicleArmoury][SERVER] AddItem result for %s: %s'):format(item.name, tostring(success)))
-end
-
--- NEW: Output the final contents
-local updatedInv = exports.ox_inventory:GetInventory(inv.id)
-if updatedInv and updatedInv.items then
-    debugPrint('[VehicleArmoury][SERVER] Final stash inventory:')
-    for _, item in pairs(updatedInv.items) do
-        debugPrint(('  - %s x%s'):format(item.name, item.count))
+        debugPrint('[VehicleArmoury][SERVER] No items found in final stash inventory.')
     end
-else
-    debugPrint('[VehicleArmoury][SERVER] No items found in final stash inventory.')
-end
 
-        debugPrint('[VehicleArmoury][SERVER] Stash populated with items.')
-        return true
-    end
+    debugPrint('[VehicleArmoury][SERVER] Stash populated with items.')
+    return true
 end)
+
 -- Discord Logging for Hooks
 CreateThread(function()
     while not exports.ox_inventory do Wait(100) end
