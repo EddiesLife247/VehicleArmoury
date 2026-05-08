@@ -2,7 +2,7 @@ Config = {}
 
 Config.Debug = false -- Can be toggled with /armourydebug
 
--- Define job groups first
+-- Define job groups
 local PDJobs = {'police', 'fib'}
 local Highways = {'highways', 'fib'}
 local FireJobs = {'fire', 'fib'}
@@ -15,7 +15,6 @@ Config.JobTypes = {
     fire = FireJobs,
     ambulance = AmbulanceJobs,
     mechanic = MechanicJobs
-
 }
 -- Generic Armoury Configuration with Job-specific Vehicle Models and Cert Checks
 Config.VehicleArmouries = {

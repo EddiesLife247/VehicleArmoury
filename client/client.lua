@@ -46,52 +46,6 @@ local function getPlayerJobType(job)
     return nil
 end
 
-local function buildItems(armoury, jobType, playerData)
-    local items = {}
-    if jobType == 'pd' then
-        if armoury.certChecks then
-            debugPrint('[ITEMS] PD - Using certChecks path')
-            for _, item in ipairs(armoury.certChecks.general and armoury.certChecks.general.items or {}) do
-                table.insert(items, item)
-            end
-            if playerData.certs then
-                for cert, hasCert in pairs(playerData.certs) do
-                    if hasCert and armoury.certChecks[cert] then
-                        for _, item in ipairs(armoury.certChecks[cert].items) do
-                            table.insert(items, item)
-                        end
-                    end
-                end
-            end
-        else
-            debugPrint('[ITEMS] PD - Using grade path')
-            local grade = playerData.job.grade.level
-            for i = 0, grade do
-                local gradeData = armoury[i]
-                if gradeData and gradeData.items then
-                    debugPrint('[ITEMS] Adding', #gradeData.items, 'items from grade', i)
-                    for _, item in ipairs(gradeData.items) do
-                        table.insert(items, item)
-                    end
-                end
-            end
-        end
-    else
-        debugPrint('[ITEMS] Non-PD - Using grade path for jobType:', jobType)
-        local grade = playerData.job.grade.level
-        for i = 0, grade do
-            local gradeData = armoury[i]
-            if gradeData and gradeData.items then
-                debugPrint('[ITEMS] Adding', #gradeData.items, 'items from grade', i)
-                for _, item in ipairs(gradeData.items) do
-                    table.insert(items, item)
-                end
-            end
-        end
-    end
-    return items
-end
-
 local function getVehicleInfo(vehicle, playerData, cb)
     local plate = trim(GetVehicleNumberPlateText(vehicle))
     local vehicleHash = GetEntityModel(vehicle)
@@ -123,20 +77,47 @@ local function getVehicleInfo(vehicle, playerData, cb)
 
             if vehicleMatches then
                 local jobAllowed = false
-                for _, j in ipairs(armouryJobList) do
-                    if j == playerData.job.name then
-                        jobAllowed = true
-                        break
-                    end
-                end
+local jobsForType = Config.JobTypes[armouryJobList]
+if jobsForType then
+    for _, j in ipairs(jobsForType) do
+        if j == playerData.job.name then
+            jobAllowed = true
+            break
+        end
+    end
+end
 
                 if jobAllowed then
                     matchedAny = true
                     debugPrint('[VEHICLEINFO] Player job', playerData.job.name, 'has access to armoury containing model:', matchedModel)
-                    local armouryJobType = jobType
-                    local builtItems = buildItems(armoury, armouryJobType, playerData)
-                    for _, item in ipairs(builtItems) do
-                        table.insert(allItems, item)
+
+                    local grade = playerData.job.grade.level
+
+                    if jobType == 'pd' and armoury.certChecks then
+                        debugPrint('[VEHICLEINFO] Using certChecks path')
+                        for _, item in ipairs(armoury.certChecks.general and armoury.certChecks.general.items or {}) do
+                            table.insert(allItems, item)
+                        end
+                        if playerData.certs then
+                            for cert, hasCert in pairs(playerData.certs) do
+                                if hasCert and armoury.certChecks[cert] then
+                                    for _, item in ipairs(armoury.certChecks[cert].items) do
+                                        table.insert(allItems, item)
+                                    end
+                                end
+                            end
+                        end
+                    else
+                        debugPrint('[VEHICLEINFO] Using grade path up to grade:', grade)
+                        for i = 0, grade do
+                            local gradeData = armoury[i]
+                            if gradeData and gradeData.items then
+                                debugPrint('[VEHICLEINFO] Adding', #gradeData.items, 'items from grade', i)
+                                for _, item in ipairs(gradeData.items) do
+                                    table.insert(allItems, item)
+                                end
+                            end
+                        end
                     end
                 else
                     debugPrint('[VEHICLEINFO] Vehicle matched but player job', playerData.job.name, 'not in this armoury job list - skipping')
@@ -166,8 +147,7 @@ local function getVehicleInfo(vehicle, playerData, cb)
     return cb({
         stashId = plate,
         label = plate,
-        items = dedupedItems,
-        jobType = jobType
+        items = dedupedItems
     })
 end
 
@@ -179,7 +159,7 @@ local function openArmoury(vehicle, playerData)
 
     getVehicleInfo(vehicle, playerData, function(info)
         if not info then
-            debugPrint('[OPEN] FAIL - getVehicleInfo returned nil')
+            debugPrint('[OPEN] FAIL - getVehicleInfo returned nil, player not certified or vehicle not matched')
             lib.notify({ description = 'You are not certified to access this vehicle armoury.', type = 'error' })
             return
         end
@@ -194,7 +174,7 @@ local function openArmoury(vehicle, playerData)
                 debugPrint('[OPEN] FAIL - createStash callback returned false for stashId:', stashId)
                 lib.notify({ description = 'Failed to open vehicle stash.', type = 'error' })
             end
-        end, stashId, info.items, info.jobType)
+        end, stashId, info.items)
     end)
 end
 
@@ -228,15 +208,18 @@ local function setupVehicleArmouryTarget(vehicle)
                     end
                 end
 
-                if vehicleMatches then
-                    for _, j in ipairs(armouryJobList) do
-                        if j == playerData.job.name then
-                            isAllowed = true
-                            debugPrint('[SETUP] Access granted via armoury job list for job:', playerData.job.name)
-                            break
-                        end
-                    end
-                end
+if vehicleMatches then
+    local jobsForType = Config.JobTypes[armouryJobList]
+    if jobsForType then
+        for _, j in ipairs(jobsForType) do
+            if j == playerData.job.name then
+                isAllowed = true
+                debugPrint('[SETUP] Access granted via armoury job list for job:', playerData.job.name)
+                break
+            end
+        end
+    end
+end
             end
             if isAllowed then break end
         end
@@ -318,28 +301,26 @@ CreateThread(function()
 
                             debugPrint('[STATIC] Player job:', playerData.job.name, '| Grade:', playerData.job.grade.level)
 
-                            -- jobType is driven by the armoury location, not the player's job
                             local jobType = location.jobTypes[1]
-                            local playerJobType = getPlayerJobType(playerData.job.name)
 
-                            if not playerJobType then
-                                debugPrint('[STATIC] FAIL - Player job type not recognized:', playerData.job.name)
-                                return
-                            end
-
-                            debugPrint('[STATIC] Player jobType:', playerJobType, '| Location jobType:', jobType)
-
-                            -- Check player's job type is allowed at this location
+                            -- Check access by looking up whether the player's job name
+                            -- exists in any of the allowed jobType groups in Config.JobTypes
                             local isAllowed = false
                             for _, allowedType in ipairs(location.jobTypes) do
-                                if allowedType == playerJobType then
-                                    isAllowed = true
-                                    break
+                                local jobsForType = Config.JobTypes[allowedType]
+                                if jobsForType then
+                                    for _, j in ipairs(jobsForType) do
+                                        if j == playerData.job.name then
+                                            isAllowed = true
+                                            break
+                                        end
+                                    end
                                 end
+                                if isAllowed then break end
                             end
 
                             if not isAllowed then
-                                debugPrint('[STATIC] FAIL - Access denied at:', location.label, '| Player jobType:', playerJobType)
+                                debugPrint('[STATIC] FAIL - Access denied at:', location.label, '| Player job:', playerData.job.name)
                                 lib.notify({ description = 'You do not have access to this armoury.', type = 'error' })
                                 return
                             end
@@ -352,7 +333,54 @@ CreateThread(function()
                                 return
                             end
 
-                            local items = buildItems(armoury, jobType, playerData)
+                            local items = {}
+
+                            if jobType == 'pd' then
+                                if armoury.certChecks then
+                                    debugPrint('[STATIC] PD - Using certChecks path')
+                                    for _, item in ipairs(armoury.certChecks.general and armoury.certChecks.general.items or {}) do
+                                        table.insert(items, item)
+                                    end
+                                    if playerData.certs then
+                                        for cert, hasCert in pairs(playerData.certs) do
+                                            debugPrint('[STATIC] PD - Cert:', cert, '| Has it:', hasCert)
+                                            if hasCert and armoury.certChecks[cert] then
+                                                for _, item in ipairs(armoury.certChecks[cert].items) do
+                                                    table.insert(items, item)
+                                                end
+                                            end
+                                        end
+                                    end
+                                else
+                                    debugPrint('[STATIC] PD - Using grade path')
+                                    local grade = playerData.job.grade.level
+                                    for i = 0, grade do
+                                        local gradeData = armoury[i]
+                                        if gradeData and gradeData.items then
+                                            debugPrint('[STATIC] PD - Adding', #gradeData.items, 'items from grade', i)
+                                            for _, item in ipairs(gradeData.items) do
+                                                table.insert(items, item)
+                                            end
+                                        else
+                                            debugPrint('[STATIC] PD - No items for grade', i)
+                                        end
+                                    end
+                                end
+                            else
+                                debugPrint('[STATIC] Non-PD - Using grade path for jobType:', jobType)
+                                local grade = playerData.job.grade.level
+                                for i = 0, grade do
+                                    local gradeData = armoury[i]
+                                    if gradeData and gradeData.items then
+                                        debugPrint('[STATIC] Adding', #gradeData.items, 'items from grade', i)
+                                        for _, item in ipairs(gradeData.items) do
+                                            table.insert(items, item)
+                                        end
+                                    else
+                                        debugPrint('[STATIC] No items for grade', i)
+                                    end
+                                end
+                            end
 
                             debugPrint('[STATIC] Total items built:', #items)
 
@@ -379,7 +407,7 @@ CreateThread(function()
                                     debugPrint('[STATIC] FAIL - createStash returned false for:', stashId)
                                     lib.notify({ description = 'Failed to open armoury stash.', type = 'error' })
                                 end
-                            end, stashId, stashItems, jobType)
+                            end, stashId, stashItems)
                         end)
                     end
                 }
@@ -404,7 +432,7 @@ RegisterCommand("adminstash", function()
                     debugPrint('[ADMINSTASH] FAIL - createStash returned false')
                     lib.notify({ description = 'Failed to open admin stash.', type = 'error' })
                 end
-            end, stashId, Config.AdminStashItems.items, 'admin')
+            end, stashId, Config.AdminStashItems.items)
         else
             debugPrint('[ADMINSTASH] FAIL - Access denied for serverId:', cache.serverId)
             lib.notify({ description = 'You do not have permission to access this.', type = 'error' })
